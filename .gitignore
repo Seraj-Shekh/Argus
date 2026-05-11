@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Environment files
+.env
+
+# Data and local fixtures
+data/
+
+# IDEs
+.vscode/
+.idea/
+
+# Byte-compiled / cache
+*.so
+
+# Tests
+.pytest_cache/
