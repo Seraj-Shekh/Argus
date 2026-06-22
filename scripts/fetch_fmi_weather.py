@@ -1,17 +1,4 @@
-"""
-Fetch FMI hourly weather observations for fire and non-fire dates, then build
-a labelled training dataset saved to data/training_dataset.csv.
-
-Steps:
-  1. Load cleaned fire events from data/fire_events_clean.csv
-  2. Fetch FMI station list (cached to data/fmi_stations.json)
-  3. Match each fire event to nearest station within 50 km
-  4. Generate 4 non-fire dates per fire day (same station, random dates)
-  5. Fetch hourly weather for all (date, station) pairs, aggregate to daily
-  6. Combine into a labelled DataFrame and save
-
-Run: python scripts/fetch_fmi_weather.py
-"""
+'Builds data/training_dataset.csv by matching fire events to FMI weather stations.'
 
 import json
 import math
@@ -25,8 +12,7 @@ from typing import Optional
 import pandas as pd
 import requests
 
-
-# ── Config ────────────────────────────────────────────────────────────────────
+# config
 
 FMI_WFS_BASE      = "https://opendata.fmi.fi/wfs"
 DATA_DIR          = Path(__file__).parent.parent / "data"
@@ -49,24 +35,31 @@ PERIOD_END            = date.today()
 FMI_STORED_QUERY  = "fmi::observations::weather::hourly::timevaluepair"
 FMI_HOURLY_PARAMS = "TA_PT1H_AVG,RH_PT1H_AVG,WS_PT1H_AVG,PRA_PT1H_ACC"
 
-# Map from FMI param name (tail of gml:id) to output column
-# Aggregation: mean for temperature/humidity/wind_speed, sum for precipitation
+# gml:id tail -> output column. temp/humidity/wind are daily means, precip is a daily sum
 PARAM_MAP = {
-    "TA_PT1H_AVG":  "temperature",   # °C  — daily mean of hourly averages
-    "RH_PT1H_AVG":  "humidity",      # %   — daily mean of hourly averages
-    "WS_PT1H_AVG":  "wind_speed",    # m/s — daily mean of hourly averages
-    "PRA_PT1H_ACC": "precipitation", # mm  — daily sum of hourly accumulations
+    "TA_PT1H_AVG":  "temperature",
+    "RH_PT1H_AVG":  "humidity",
+    "WS_PT1H_AVG":  "wind_speed",
+    "PRA_PT1H_ACC": "precipitation",
 }
 
-WML2_NS = "http://www.opengis.net/waterml/2.0"
-GML_NS  = "http://www.opengis.net/gml/3.2"
-EF_NS   = "http://inspire.ec.europa.eu/schemas/ef/4.0"
+WML2_NS   = "http://www.opengis.net/waterml/2.0"
+GML_NS    = "http://www.opengis.net/gml/3.2"
+EF_NS     = "http://inspire.ec.europa.eu/schemas/ef/4.0"
+XLINK_NS  = "http://www.w3.org/1999/xlink"
+
+# fmi::ef::stations returns every station type (buoys, rain gauges, road
+# sensors...). only these two networks actually answer the hourly weather query.
+GOOD_NETWORKS = {
+    "Automaattinen sääasema",
+    "IL:n hallinnoima lentosääasema",
+}
 
 
-# ── HTTP ──────────────────────────────────────────────────────────────────────
+# http
 
 def get_xml(params: dict) -> Optional[str]:
-    """GET the FMI WFS endpoint, retry on transient failures. Returns None on permanent failure."""
+    'GET the FMI WFS endpoint, retry a couple times, give up and return None.'
     for attempt in range(MAX_RETRIES + 1):
         try:
             r = requests.get(FMI_WFS_BASE, params=params, timeout=REQUEST_TIMEOUT_S)
@@ -78,7 +71,7 @@ def get_xml(params: dict) -> Optional[str]:
     return None
 
 
-# ── Distance ──────────────────────────────────────────────────────────────────
+# distance
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371.0
@@ -89,17 +82,17 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-# ── FMI Stations ──────────────────────────────────────────────────────────────
+# FMI stations
 
 def fetch_stations() -> list[dict]:
-    """Return FMI station list for Finland, fetching from API and caching on first call."""
+# Load FMI weather stations (filtered to GOOD_NETWORKS), cached after first fetch.
     if STATIONS_CACHE.exists():
         with open(STATIONS_CACHE) as f:
             stations = json.load(f)
-        print(f"Loaded {len(stations)} FMI stations from cache")
+        print(f"Loaded {len(stations)} FMI weather stations from cache", flush=True)
         return stations
 
-    print("Fetching FMI station list from API...")
+    print("Fetching FMI station list from API...", flush=True)
     xml_text = get_xml({
         "service": "WFS", "version": "2.0.0",
         "request": "GetFeature",
@@ -110,11 +103,10 @@ def fetch_stations() -> list[dict]:
 
     root = ET.fromstring(xml_text)
     stations = []
+    skipped_network = 0
 
     for facility in root.iter(f"{{{EF_NS}}}EnvironmentalMonitoringFacility"):
         try:
-            # fmisid is the trailing integer in the gml:identifier URL
-            # e.g. "http://xml.fmi.fi/stations/101004" → 101004
             ident_el = facility.find(f"{{{GML_NS}}}identifier")
             if ident_el is None or not ident_el.text:
                 continue
@@ -122,6 +114,12 @@ def fetch_stations() -> list[dict]:
             if not parts[-1].isdigit():
                 continue
             fmisid = int(parts[-1])
+
+            belongs_el = facility.find(f"{{{EF_NS}}}belongsTo")
+            network = belongs_el.get(f"{{{XLINK_NS}}}title", "") if belongs_el is not None else ""
+            if network not in GOOD_NETWORKS:
+                skipped_network += 1
+                continue
 
             pos_el = facility.find(f".//{{{GML_NS}}}pos")
             if pos_el is None:
@@ -140,14 +138,15 @@ def fetch_stations() -> list[dict]:
         except Exception:
             continue
 
+    print(f"  Kept {len(stations)} weather stations, skipped {skipped_network} non-weather stations", flush=True)
     with open(STATIONS_CACHE, "w") as f:
         json.dump(stations, f, indent=2)
-    print(f"Found and cached {len(stations)} FMI stations in Finland")
+    print(f"  Cached to {STATIONS_CACHE}", flush=True)
     return stations
 
 
 def nearest_station(lat: float, lon: float, stations: list[dict]) -> Optional[dict]:
-    """Return the nearest station within MAX_STATION_RADIUS_KM, or None if none found."""
+    # Nearest station within MAX_STATION_RADIUS_KM, or None
     best, best_d = None, float("inf")
     for stn in stations:
         d = haversine_km(lat, lon, stn["lat"], stn["lon"])
@@ -158,7 +157,7 @@ def nearest_station(lat: float, lon: float, stations: list[dict]) -> Optional[di
     return None
 
 
-# ── FMI Observations ──────────────────────────────────────────────────────────
+# FMI observations
 
 def _cache_path(fmisid: int, obs_date: date) -> Path:
     return CACHE_DIR / f"{fmisid}_{obs_date.isoformat()}.json"
@@ -166,10 +165,9 @@ def _cache_path(fmisid: int, obs_date: date) -> Path:
 
 def fetch_daily_obs(fmisid: int, obs_date: date) -> Optional[dict]:
     """
-    Fetch hourly observations for one station/day, aggregate to daily values.
-    Returns dict: {temperature, humidity, wind_speed, precipitation} (values may be None).
-    Caches each result to disk — safe to interrupt and resume.
-    Returns None only on a hard API failure (not on missing data).
+    Fetch hourly weather for one station/day and aggregate to daily values.
+    Cached to disk so the script can be killed and resumed without refetching.
+    Returns None only on a hard API failure, not on missing data.
     """
     cp = _cache_path(fmisid, obs_date)
     if cp.exists():
@@ -201,11 +199,7 @@ def fetch_daily_obs(fmisid: int, obs_date: date) -> Optional[dict]:
 
 
 def _parse_hourly_xml(xml_text: str) -> dict:
-    """
-    Parse FMI hourly WFS response. Collects all valid hourly values per parameter,
-    then returns daily aggregates: mean for temp/humidity/wind, sum for precipitation.
-    Handles FMI's "NaN" string and -1 sentinel for missing values.
-    """
+    # Parse the WFS response and aggregate hourly values to one daily value per param.
     buckets: dict[str, list[float]] = {col: [] for col in PARAM_MAP.values()}
 
     try:
@@ -230,7 +224,7 @@ def _parse_hourly_xml(xml_text: str) -> dict:
                 continue
             if math.isnan(val):
                 continue
-            # FMI uses -1 as a sentinel for precipitation "not measured"
+            # -1 means "not measured" for precipitation
             if col == "precipitation" and val < 0:
                 continue
             buckets[col].append(val)
@@ -246,7 +240,7 @@ def _parse_hourly_xml(xml_text: str) -> dict:
     return result
 
 
-# ── Non-fire Date Generation ──────────────────────────────────────────────────
+# non-fire date generation
 
 def make_nonfire_dates(
     global_fire_dates: set[date],
@@ -254,9 +248,7 @@ def make_nonfire_dates(
     n: int,
     rng: random.Random,
 ) -> list[date]:
-    """
-    Draw n random dates from PERIOD_START..PERIOD_END not present in any fire record.
-    """
+    """n random dates in range that aren't a fire date anywhere or at this station."""
     excluded  = global_fire_dates | station_fire_dates
     total_days = (PERIOD_END - PERIOD_START).days
     chosen: list[date] = []
@@ -269,7 +261,7 @@ def make_nonfire_dates(
     return chosen
 
 
-# ── Pipeline ──────────────────────────────────────────────────────────────────
+# pipeline
 
 def main() -> None:
     DATA_DIR.mkdir(exist_ok=True)
@@ -277,26 +269,25 @@ def main() -> None:
     rng = random.Random(RANDOM_SEED)
     log = open(SKIPPED_LOG, "w")
 
-    # Step 1 — load fire events
-    print("Loading fire events...")
+    print("Loading fire events...", flush=True)
     fire_df = pd.read_csv(FIRE_EVENTS_CSV, parse_dates=["date"])
     fire_df["date"] = fire_df["date"].dt.date
-    print(f"  {len(fire_df)} detections, {fire_df['date'].nunique()} unique dates")
+    print(f"  {len(fire_df)} detections, {fire_df['date'].nunique()} unique dates", flush=True)
 
-    # Step 2 — load FMI stations
     stations = fetch_stations()
 
-    # Step 3 — match fire events to nearest station within 50 km
-    print("Matching fire events to nearest FMI stations (≤50 km)...")
+    print(f"Matching fire events to nearest station (<=50 km)...", flush=True)
     matched, skipped_no_station = [], 0
-    for _, row in fire_df.iterrows():
-        stn = nearest_station(row["lat"], row["lon"], stations)
+    for i, row in enumerate(fire_df.itertuples(), 1):
+        if i % 3000 == 0:
+            print(f"  Matching: {i}/{len(fire_df)}", flush=True)
+        stn = nearest_station(row.lat, row.lon, stations)
         if stn is None:
             skipped_no_station += 1
-            log.write(f"NO_STATION  lat={row['lat']:.5f} lon={row['lon']:.5f} date={row['date']}\n")
+            log.write(f"NO_STATION  lat={row.lat:.5f} lon={row.lon:.5f} date={row.date}\n")
             continue
         matched.append({
-            "date":        row["date"],
+            "date":        row.date,
             "fmisid":      stn["fmisid"],
             "station_lat": stn["lat"],
             "station_lon": stn["lon"],
@@ -304,15 +295,14 @@ def main() -> None:
         })
 
     matched_df = pd.DataFrame(matched)
-    print(f"  {len(matched_df)} matched, {skipped_no_station} skipped (no station within 50 km)")
+    print(f"  {len(matched_df)} matched, {skipped_no_station} skipped (no station within 50 km)", flush=True)
 
     fire_pairs = matched_df.drop_duplicates(subset=["date", "fmisid"]).reset_index(drop=True)
-    print(f"  {len(fire_pairs)} unique (date, station) fire pairs after deduplication")
+    print(f"  {len(fire_pairs)} unique (date, station) fire pairs after deduplication", flush=True)
 
     all_fire_dates: set[date] = set(fire_df["date"].unique())
 
-    # Step 4 — generate non-fire dates
-    print("Generating non-fire dates...")
+    print("Generating non-fire dates...", flush=True)
     station_fire_dates: dict[int, set[date]] = {}
     for _, row in fire_pairs.iterrows():
         station_fire_dates.setdefault(int(row["fmisid"]), set()).add(row["date"])
@@ -334,35 +324,40 @@ def main() -> None:
         .drop_duplicates(subset=["date", "fmisid"])
         .reset_index(drop=True)
     )
-    print(f"  {len(nonfire_pairs)} unique non-fire (date, station) pairs")
+    print(f"  {len(nonfire_pairs)} unique non-fire (date, station) pairs", flush=True)
 
-    # Step 5 — fetch weather for fire days
-    print(f"\nFetching weather for {len(fire_pairs)} fire day/station pairs...")
+    print(f"\nFetching weather for {len(fire_pairs)} fire day/station pairs...", flush=True)
     fire_rows = []
-    for i, row in fire_pairs.iterrows():
-        if (i + 1) % 100 == 0:
-            print(f"  Fire: {i+1}/{len(fire_pairs)}")
-        obs = fetch_daily_obs(int(row["fmisid"]), row["date"])
+    for i, row in enumerate(fire_pairs.itertuples(), 1):
+        if i % 200 == 0:
+            print(f"  Fire: {i}/{len(fire_pairs)}", flush=True)
+        obs = fetch_daily_obs(int(row.fmisid), row.date)
         if obs is None:
-            log.write(f"FETCH_FAIL  fmisid={row['fmisid']} date={row['date']}\n")
+            log.write(f"FETCH_FAIL  fmisid={row.fmisid} date={row.date}\n")
             continue
-        fire_rows.append({**row.to_dict(), **obs, "fire": 1})
+        fire_rows.append({
+            "date": row.date, "fmisid": row.fmisid,
+            "station_lat": row.station_lat, "station_lon": row.station_lon,
+            **obs, "fire": 1,
+        })
 
-    # Step 6 — fetch weather for non-fire days
-    print(f"\nFetching weather for {len(nonfire_pairs)} non-fire day/station pairs...")
+    print(f"\nFetching weather for {len(nonfire_pairs)} non-fire day/station pairs...", flush=True)
     nonfire_rows = []
-    for i, row in nonfire_pairs.iterrows():
-        if (i + 1) % 100 == 0:
-            print(f"  Non-fire: {i+1}/{len(nonfire_pairs)}")
-        obs = fetch_daily_obs(int(row["fmisid"]), row["date"])
+    for i, row in enumerate(nonfire_pairs.itertuples(), 1):
+        if i % 200 == 0:
+            print(f"  Non-fire: {i}/{len(nonfire_pairs)}", flush=True)
+        obs = fetch_daily_obs(int(row.fmisid), row.date)
         if obs is None:
-            log.write(f"FETCH_FAIL_NF fmisid={row['fmisid']} date={row['date']}\n")
+            log.write(f"FETCH_FAIL_NF fmisid={row.fmisid} date={row.date}\n")
             continue
-        nonfire_rows.append({**row.to_dict(), **obs, "fire": 0})
+        nonfire_rows.append({
+            "date": row.date, "fmisid": row.fmisid,
+            "station_lat": row.station_lat, "station_lon": row.station_lon,
+            **obs, "fire": 0,
+        })
 
-    # Step 7 — combine, select columns, save
     if not fire_rows and not nonfire_rows:
-        print("\nERROR: No rows collected — all API calls failed. Check network/FMI API.")
+        print("\nERROR: No rows collected — all API calls failed. Check network/FMI API.", flush=True)
         log.close()
         return
 
@@ -370,21 +365,27 @@ def main() -> None:
     dataset = dataset[["date", "fmisid", "station_lat", "station_lon",
                         "temperature", "humidity", "wind_speed", "precipitation", "fire"]]
 
-    n_fire    = (dataset["fire"] == 1).sum()
-    n_nonfire = (dataset["fire"] == 0).sum()
-    n_missing = dataset[["temperature", "humidity", "wind_speed", "precipitation"]].isna().any(axis=1).sum()
+    weather_cols = ["temperature", "humidity", "wind_speed", "precipitation"]
+    before = len(dataset)
+    dataset = dataset.dropna(subset=weather_cols, how="all").reset_index(drop=True)
 
-    print("\n── Dataset summary ───────────────────────────────────────")
-    print(f"  Total rows:                 {len(dataset)}")
-    print(f"  Fire days    (label=1):     {n_fire}")
-    print(f"  Non-fire days (label=0):    {n_nonfire}")
-    print(f"  Rows with ≥1 missing value: {n_missing}")
-    print(f"  Class ratio fire:non-fire:  1:{n_nonfire // max(n_fire, 1)}")
+    n_fire     = (dataset["fire"] == 1).sum()
+    n_nonfire  = (dataset["fire"] == 0).sum()
+    n_missing  = dataset[weather_cols].isna().any(axis=1).sum()
+    n_complete = dataset[weather_cols].notna().all(axis=1).sum()
+
+    print("\n-- Dataset summary ------------------------------------------", flush=True)
+    print(f"  Total rows (dropped {before - len(dataset)} all-empty): {len(dataset)}", flush=True)
+    print(f"  Fire days         (label=1):  {n_fire}", flush=True)
+    print(f"  Non-fire days     (label=0):  {n_nonfire}", flush=True)
+    print(f"  Rows with >=1 missing value:  {n_missing}", flush=True)
+    print(f"  Fully complete rows (all 4):  {n_complete}", flush=True)
+    print(f"  Class ratio fire:non-fire:    1:{n_nonfire // max(n_fire, 1)}", flush=True)
 
     dataset.to_csv(OUTPUT_CSV, index=False)
     log.close()
-    print(f"\nSaved → {OUTPUT_CSV}")
-    print(f"Skipped log → {SKIPPED_LOG}")
+    print(f"\nSaved -> {OUTPUT_CSV}")
+    print(f"Skipped log -> {SKIPPED_LOG}")
 
 
 if __name__ == "__main__":

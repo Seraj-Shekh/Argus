@@ -13,7 +13,12 @@ ENV/
 .env
 
 # Data and local fixtures
-data/
+data/fmi_cache/
+data/skipped_events.log
+data/fmi_stations.json
+
+# Trained model 
+models/
 
 # IDEs
 .vscode/
