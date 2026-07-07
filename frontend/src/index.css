@@ -1,0 +1,41 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: #0a0f0a;
+  color: #e2e8e2;
+  font-family: system-ui, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+/* Leaflet popup override for dark theme */
+.leaflet-popup-content-wrapper {
+  background: #1a2e1a;
+  color: #e2e8e2;
+  border: 1px solid #2d4a2d;
+}
+.leaflet-popup-tip {
+  background: #1a2e1a;
+}
+
+/* Region hover tooltip */
+.argus-tooltip {
+  background: #1a2e1a !important;
+  border: 1px solid #2d4a2d !important;
+  color: #e2e8e2 !important;
+  font-size: 12px !important;
+  border-radius: 6px !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+}
+.argus-tooltip::before {
+  border-top-color: #2d4a2d !important;
+}
