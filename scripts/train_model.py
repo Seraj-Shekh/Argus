@@ -11,43 +11,27 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 
-# Use lagged dataset if available, otherwise fall back to base dataset
-LAGGED_PATH = Path("data/training_dataset_lagged.csv")
-BASE_PATH   = Path("data/training_dataset.csv")
-DATA_PATH   = LAGGED_PATH if LAGGED_PATH.exists() else BASE_PATH
-
+DATA_PATH  = Path("data/training_dataset.csv")
 MODEL_DIR  = Path("models")
 MODEL_PATH = MODEL_DIR / "fire_risk_model.pkl"
 
-BASE_FEATURES = [
+FEATURES = [
     "temperature", "humidity", "wind_speed", "precipitation",
     "station_lat", "station_lon", "day_of_year", "month",
 ]
-LAGGED_FEATURES = ["days_since_rain", "temp_rolling_7d"]
 LABEL = "fire"
 
 
 def main() -> None:
     MODEL_DIR.mkdir(exist_ok=True)
 
-    print(f"Loading dataset from {DATA_PATH}...")
+    print("Loading dataset...")
     df = pd.read_csv(DATA_PATH, parse_dates=["date"])
     df["day_of_year"] = df["date"].dt.dayofyear
     df["month"]       = df["date"].dt.month
     print(f"  {len(df)} rows, {df[LABEL].sum()} fire / {(df[LABEL]==0).sum()} non-fire")
 
-    # Include lagged features only if they exist in this dataset
-    extra = [f for f in LAGGED_FEATURES if f in df.columns]
-    features = BASE_FEATURES + extra
-    if extra:
-        print(f"  Lagged features included: {extra}")
-        for f in extra:
-            pct = df[f].notna().mean() * 100
-            print(f"    {f}: {pct:.1f}% populated")
-    else:
-        print("  No lagged features found — training on base 8 features")
-
-    X = df[features]
+    X = df[FEATURES]
     y = df[LABEL]
 
     X_train, X_test, y_train, y_test = train_test_split(
@@ -79,12 +63,11 @@ def main() -> None:
 
     print("\nFeature importances:")
     importances = pipeline.named_steps["clf"].feature_importances_
-    for feat, imp in sorted(zip(features, importances), key=lambda x: -x[1]):
-        print(f"  {feat:<20} {imp:.4f}")
+    for feat, imp in sorted(zip(FEATURES, importances), key=lambda x: -x[1]):
+        print(f"  {feat:<15} {imp:.4f}")
 
     joblib.dump(pipeline, MODEL_PATH)
     print(f"\nModel saved -> {MODEL_PATH}")
-    print(f"Features used: {features}")
 
 
 if __name__ == "__main__":

@@ -22,19 +22,14 @@ from sqlalchemy.orm import Session
 
 from app.database.session import get_db
 from app.models.sensor_models import SensorReading
-from app.utils.fmi_client import (
-    fetch_forecast_weather,
-    fetch_forecast_precipitation,
-    fetch_lagged_features,
-)
+from app.utils.fmi_client import fetch_forecast_weather, fetch_forecast_precipitation
 
 router = APIRouter()
 
-BASE_FEATURES = [
+FEATURE_ORDER = [
     "temperature", "humidity", "wind_speed", "precipitation",
     "station_lat", "station_lon", "day_of_year", "month",
 ]
-LAGGED_FEATURES = ["days_since_rain", "temp_rolling_7d"]
 
 _model = None
 
@@ -175,15 +170,7 @@ def predict(body: PredictRequest, db: Session = Depends(get_db)) -> PredictRespo
         "month": ts.month,
     }
 
-    # If the loaded model was retrained with lagged features (10 features),
-    # compute them. The imputer handles None if data is unavailable.
-    feature_order = BASE_FEATURES
-    if model.n_features_in_ == len(BASE_FEATURES) + len(LAGGED_FEATURES):
-        lagged = fetch_lagged_features(body.station_lat, body.station_lon)
-        features.update(lagged)
-        feature_order = BASE_FEATURES + LAGGED_FEATURES
-
-    X = pd.DataFrame([features], columns=feature_order)
+    X = pd.DataFrame([features], columns=FEATURE_ORDER)
     proba = model.predict_proba(X)[0]
     fire_proba = float(proba[1])
     confidence = float(max(proba))
