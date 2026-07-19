@@ -25,15 +25,19 @@ def connect_wifi() -> bool:
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     if wlan.isconnected():
+        print("Already connected:", wlan.ifconfig()[0])
         return True
-    print("Connecting to WiFi...")
+    print("Connecting to WiFi SSID:", config.WIFI_SSID)
     wlan.connect(config.WIFI_SSID, config.WIFI_PASSWORD)
-    for _ in range(20):
+    for i in range(30):
+        status = wlan.status()
+        print(f"  [{i}] status={status}")
         if wlan.isconnected():
-            print("Connected:", wlan.ifconfig()[0])
+            ip = wlan.ifconfig()[0]
+            print("Connected! ESP32 IP:", ip)
             return True
         time.sleep(1)
-    print("WiFi connection failed")
+    print("WiFi failed. Last status:", wlan.status())
     return False
 
 
