@@ -205,6 +205,31 @@ export default function Predict() {
           )}
         </div>
       )}
+
+      {/* Alert message — shown for medium and high risk */}
+      {result?.alert && (
+        <div className={`border rounded-lg p-5 ${
+          result.risk_level === 'high'
+            ? 'bg-red-900/20 border-red-800'
+            : 'bg-orange-900/20 border-orange-800'
+        }`}>
+          <div className="flex items-center gap-2 mb-3">
+            <span className={`text-sm font-semibold ${result.risk_level === 'high' ? 'text-red-400' : 'text-orange-400'}`}>
+              AI-Generated Alert
+            </span>
+          </div>
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs text-[#6b8f6b] mb-1">English</p>
+              <p className="text-sm text-[#e2e8e2] leading-relaxed">{result.alert.message_en}</p>
+            </div>
+            <div className="border-t border-[#1e3a1e] pt-3">
+              <p className="text-xs text-[#6b8f6b] mb-1">Suomi</p>
+              <p className="text-sm text-[#e2e8e2] leading-relaxed">{result.alert.message_fi}</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

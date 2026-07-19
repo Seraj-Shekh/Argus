@@ -21,8 +21,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database.session import get_db
-from app.models.sensor_models import SensorReading
+from app.models.sensor_models import Alert, SensorReading
 from app.utils.fmi_client import fetch_forecast_weather, fetch_forecast_precipitation
+from app.utils.openai_client import generate_alert
 
 router = APIRouter()
 
@@ -52,13 +53,22 @@ def get_model():
 class PredictRequest(BaseModel):
     station_lat: float
     station_lon: float
+    location_name: Optional[str] = None
+    node_id: Optional[str] = None
     temperature: Optional[float] = None
     humidity: Optional[float] = None
     wind_speed: Optional[float] = None
     precipitation: Optional[float] = None
+    smoke: Optional[float] = None
     timestamp: Optional[str] = Field(
         default=None, description="ISO8601 timestamp, defaults to current UTC time"
     )
+
+
+class AlertPayload(BaseModel):
+    message_en: str
+    message_fi: str
+    ai_metadata: Optional[dict] = None
 
 
 class PredictResponse(BaseModel):
@@ -72,6 +82,7 @@ class PredictResponse(BaseModel):
     timestamp: str
     features_used: dict
     warning: Optional[str] = None
+    alert: Optional[AlertPayload] = None
 
 
 def _risk_level(probability: float) -> str:
@@ -98,6 +109,31 @@ def _detect_mode(body: PredictRequest) -> str:
             "together, or all omitted to use FMI-only mode",
         )
     return "hardware_only" if body.precipitation is not None else "hardware_fmi"
+
+
+@router.get("/alerts")
+def get_alerts(db: Session = Depends(get_db)):
+    rows = db.query(Alert).order_by(Alert.timestamp.desc()).limit(200).all()
+    return [
+        {
+            "id":          r.id,
+            "node_id":     r.node_id,
+            "source":      r.source,
+            "severity":    r.severity,
+            "risk_level":  r.risk_level,
+            "message_en":  r.message_en,
+            "message_fi":  r.message_fi,
+            "temperature": r.temperature,
+            "humidity":    r.humidity,
+            "wind_speed":  r.wind_speed,
+            "precipitation": r.precipitation,
+            "station_lat": r.station_lat,
+            "station_lon": r.station_lon,
+            "ai_metadata": r.ai_metadata,
+            "timestamp":   r.timestamp.isoformat() if r.timestamp else None,
+        }
+        for r in rows
+    ]
 
 
 @router.get("/sensor-readings")
@@ -176,16 +212,50 @@ def predict(body: PredictRequest, db: Session = Depends(get_db)) -> PredictRespo
     confidence = float(max(proba))
     risk_level = _risk_level(fire_proba)
 
+    # Generate alert for medium and high risk only
+    alert_payload: Optional[AlertPayload] = None
+    if risk_level in ("medium", "high"):
+        generated = generate_alert(
+            risk_level=risk_level,
+            location_name=body.location_name or f"{body.station_lat:.2f}°N {body.station_lon:.2f}°E",
+            features=features,
+            fire_probability=fire_proba,
+        )
+        alert_payload = AlertPayload(
+            message_en=generated["message_en"],
+            message_fi=generated["message_fi"],
+            ai_metadata=generated.get("ai_metadata"),
+        )
+
+    node_id = body.node_id or "predict-api"
+    source  = "hardware" if mode in ("hardware_fmi", "hardware_only") else "software"
+
     try:
-        # sensor_readings has no precipitation/lat/lon/input_mode columns yet,
-        # so only the fields that exist on the model are logged.
         db.add(SensorReading(
-            node_id="predict-api",
+            node_id=node_id,
             temperature=temperature,
             humidity=humidity,
             wind_speed=wind_speed,
+            smoke=body.smoke,
             risk_level=risk_level,
         ))
+        if alert_payload:
+            db.add(Alert(
+                node_id=node_id,
+                source=source,
+                message_en=alert_payload.message_en,
+                message_fi=alert_payload.message_fi,
+                severity=risk_level,
+                risk_level=risk_level,
+                temperature=temperature,
+                humidity=humidity,
+                wind_speed=wind_speed,
+                precipitation=precipitation,
+                smoke=body.smoke,
+                station_lat=body.station_lat,
+                station_lon=body.station_lon,
+                ai_metadata=alert_payload.ai_metadata,
+            ))
         db.commit()
     except Exception:
         db.rollback()
@@ -201,4 +271,5 @@ def predict(body: PredictRequest, db: Session = Depends(get_db)) -> PredictRespo
         timestamp=ts.isoformat(),
         features_used=features,
         warning=warning,
+        alert=alert_payload,
     )

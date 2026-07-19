@@ -29,11 +29,13 @@ class Settings:
 
     - `database_url`: SQLAlchemy connection URL (built from DB_* vars)
     - `fmi_base_url`: FMI Open Data WFS base URL
+    - `openai_api_key`: OpenAI API key for alert generation
     - `env`: application environment (development/production)
     """
 
     database_url: str
     fmi_base_url: str = "https://opendata.fmi.fi/wfs"
+    openai_api_key: str = ""
     env: str = "development"
 
 
@@ -75,6 +77,7 @@ def get_settings() -> Settings:
     return Settings(
         database_url=database_url,
         fmi_base_url=os.getenv("FMI_BASE_URL", "https://opendata.fmi.fi/wfs"),
+        openai_api_key=os.getenv("OPEN_AI_API_KEY", ""),
         env=os.getenv("ENV", "development"),
     )
 

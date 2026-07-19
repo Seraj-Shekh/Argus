@@ -73,7 +73,7 @@ async function fetchRisk(name) {
     const res = await fetch('/api/predict', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ station_lat: center.lat, station_lon: center.lon }),
+      body: JSON.stringify({ station_lat: center.lat, station_lon: center.lon, location_name: name }),
     })
     if (!res.ok) return null
     return { name, ...(await res.json()) }
@@ -243,39 +243,61 @@ export default function Dashboard() {
         {/* Side panel */}
         <div className="flex flex-col gap-4">
           {/* Selected region */}
-          <div className="bg-[#0d150d] border border-[#1e3a1e] rounded-lg p-4 flex-1">
-            <h2 className="text-sm font-medium text-[#8aab8a] mb-3">
-              {selected ? selected.name : 'Region Detail'}
-            </h2>
-            {!selected && (
-              <p className="text-sm text-[#4a6a4a]">Hover or click a region on the map.</p>
-            )}
-            {selected && (
-              <div className="text-sm space-y-1">
-                {selected.risk_level ? (
-                  <>
-                    <div className="flex items-center gap-2 mb-3">
-                      <RiskBadge level={selected.risk_level} />
-                      <span className="text-[#6b8f6b]">
-                        {(selected.fire_risk * 100).toFixed(1)}% probability
-                      </span>
-                    </div>
-                    <Row label="Temperature"   value={selected.features_used?.temperature != null ? `${selected.features_used.temperature} °C` : null} />
-                    <Row label="Humidity"      value={selected.features_used?.humidity != null ? `${selected.features_used.humidity} %` : null} />
-                    <Row label="Wind Speed"    value={selected.features_used?.wind_speed != null ? `${selected.features_used.wind_speed} m/s` : null} />
-                    <Row label="Precipitation" value={selected.features_used?.precipitation != null ? `${selected.features_used.precipitation} mm` : null} />
-                    <div className="pt-2 mt-1 border-t border-[#1e3a1e]">
-                      <Row label="Weather data" value={selected.fmi_station_name} />
-                      <Row label="Confidence"  value={selected.confidence != null ? `${(selected.confidence * 100).toFixed(1)}%` : null} />
-                    </div>
-                    {selected.warning && (
-                      <p className="text-orange-400 text-xs mt-2">{selected.warning}</p>
-                    )}
-                  </>
+          <div className="bg-[#0d150d] border border-[#1e3a1e] rounded-lg p-4 flex-1 overflow-y-auto">
+            {!selected ? (
+              <>
+                <h2 className="text-sm font-medium text-[#8aab8a] mb-2">Region Detail</h2>
+                <p className="text-sm text-[#4a6a4a]">Click a region name below or on the map.</p>
+              </>
+            ) : !selected.risk_level ? (
+              <>
+                <h2 className="text-sm font-medium text-[#e2e8e2] mb-2">{selected.name}</h2>
+                <p className="text-[#4a6a4a] text-sm">No prediction data for this region.</p>
+              </>
+            ) : (
+              <>
+                {/* Region name + risk badge */}
+                <div className="flex items-center gap-2 mb-4">
+                  <h2 className="text-sm font-semibold text-[#e2e8e2] flex-1">{selected.name}</h2>
+                  <RiskBadge level={selected.risk_level} />
+                </div>
+
+                {/* Alert block — shown first and prominently */}
+                {selected.alert ? (
+                  <div className={`p-3 rounded-lg border text-xs leading-relaxed mb-4 ${
+                    selected.risk_level === 'high'
+                      ? 'bg-red-900/20 border-red-800'
+                      : 'bg-orange-900/20 border-orange-800'
+                  }`}>
+                    <p className={`font-semibold text-xs mb-2 ${selected.risk_level === 'high' ? 'text-red-400' : 'text-orange-400'}`}>
+                      Fire Risk Alert
+                    </p>
+                    <p className="text-[#e2e8e2] mb-2 leading-relaxed">{selected.alert.message_en}</p>
+                    <p className="text-[#b0ccb0] border-t border-[#1e3a1e] pt-2 leading-relaxed">{selected.alert.message_fi}</p>
+                  </div>
                 ) : (
-                  <p className="text-[#4a6a4a] text-sm">No prediction data for this region yet.</p>
+                  <div className="p-3 rounded-lg border border-[#1e3a1e] bg-green-900/10 text-xs text-green-500 mb-4">
+                    No alert — fire risk is low for this region.
+                  </div>
                 )}
-              </div>
+
+                {/* Weather details */}
+                <div className="text-sm space-y-1">
+                  <p className="text-xs text-[#6b8f6b] mb-1">Weather data</p>
+                  <Row label="Fire probability" value={`${(selected.fire_risk * 100).toFixed(1)}%`} />
+                  <Row label="Temperature"   value={selected.features_used?.temperature != null ? `${selected.features_used.temperature} °C` : null} />
+                  <Row label="Humidity"      value={selected.features_used?.humidity != null ? `${selected.features_used.humidity} %` : null} />
+                  <Row label="Wind Speed"    value={selected.features_used?.wind_speed != null ? `${selected.features_used.wind_speed} m/s` : null} />
+                  <Row label="Precipitation" value={selected.features_used?.precipitation != null ? `${selected.features_used.precipitation} mm` : null} />
+                  <div className="pt-2 mt-1 border-t border-[#1e3a1e]">
+                    <Row label="Source"     value={selected.fmi_station_name} />
+                    <Row label="Confidence" value={selected.confidence != null ? `${(selected.confidence * 100).toFixed(1)}%` : null} />
+                  </div>
+                  {selected.warning && (
+                    <p className="text-orange-400 text-xs mt-2">{selected.warning}</p>
+                  )}
+                </div>
+              </>
             )}
           </div>
 
