@@ -11,6 +11,7 @@ ENV/
 
 # Environment files
 .env
+hardware/config.py
 
 # Data and local fixtures
 data/fmi_cache/
