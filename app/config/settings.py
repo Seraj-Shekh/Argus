@@ -37,6 +37,11 @@ class Settings:
     fmi_base_url: str = "https://opendata.fmi.fi/wfs"
     openai_api_key: str = ""
     env: str = "development"
+    pi_gateway_url: str = ""
+    sensor_lat: float = 0.0
+    sensor_lon: float = 0.0
+    sensor_location_name: str = ""
+    sensor_node_id: str = ""
 
 
 def get_settings() -> Settings:
@@ -79,6 +84,11 @@ def get_settings() -> Settings:
         fmi_base_url=os.getenv("FMI_BASE_URL", "https://opendata.fmi.fi/wfs"),
         openai_api_key=os.getenv("OPEN_AI_API_KEY", ""),
         env=os.getenv("ENV", "development"),
+        pi_gateway_url=os.getenv("PI_GATEWAY_URL", ""),
+        sensor_lat=float(os.getenv("SENSOR_LAT", 0) or 0),
+        sensor_lon=float(os.getenv("SENSOR_LON", 0) or 0),
+        sensor_location_name=os.getenv("SENSOR_LOCATION_NAME", ""),
+        sensor_node_id=os.getenv("ESP32_NODE_ID", ""),
     )
 
 

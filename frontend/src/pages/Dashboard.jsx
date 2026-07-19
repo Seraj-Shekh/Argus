@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { MapContainer, TileLayer, GeoJSON } from 'react-leaflet'
+import { MapContainer, TileLayer, GeoJSON, CircleMarker, Popup } from 'react-leaflet'
 
 const FINLAND_CENTER = [65.0, 26.0]
 const FINLAND_BOUNDS = [[59.3, 19.0], [70.1, 31.6]]
@@ -90,6 +90,7 @@ export default function Dashboard() {
   const [backendDown, setBackendDown] = useState(false)
   const [selected, setSelected]     = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
+  const [sensorNodes, setSensorNodes] = useState([])
 
   // Load GeoJSON boundaries once
   useEffect(() => {
@@ -97,6 +98,14 @@ export default function Dashboard() {
       .then((r) => r.json())
       .then(setGeojson)
       .catch(() => console.error('Could not load finland-regions.geojson'))
+  }, [])
+
+  // Load hardware sensor node locations
+  useEffect(() => {
+    fetch('/api/sensor-nodes')
+      .then((r) => r.ok ? r.json() : [])
+      .then(setSensorNodes)
+      .catch(() => {})
   }, [])
 
   // Fetch predictions for all regions
@@ -237,6 +246,46 @@ export default function Dashboard() {
                 onEachFeature={onEachFeature}
               />
             )}
+            {sensorNodes.map((node) => (
+              <CircleMarker
+                key={node.node_id}
+                center={[node.lat, node.lon]}
+                radius={10}
+                pathOptions={{
+                  color: '#4ade80',
+                  fillColor: '#4ade80',
+                  fillOpacity: 0.9,
+                  weight: 2,
+                }}
+              >
+                <Popup className="argus-popup">
+                  <div style={{ minWidth: 180, fontFamily: 'monospace', fontSize: 12 }}>
+                    <div style={{ fontWeight: 700, color: '#4ade80', marginBottom: 6 }}>
+                      Hardware Sensor
+                    </div>
+                    <div style={{ color: '#c8dcc8', marginBottom: 4 }}>{node.name}</div>
+                    {node.latest ? (
+                      <>
+                        <div style={{ color: '#8aab8a' }}>Temp: <span style={{ color: '#e2e8e2' }}>{node.latest.temperature}°C</span></div>
+                        <div style={{ color: '#8aab8a' }}>Humidity: <span style={{ color: '#e2e8e2' }}>{node.latest.humidity}%</span></div>
+                        <div style={{ color: '#8aab8a' }}>Wind: <span style={{ color: '#e2e8e2' }}>{node.latest.wind_speed} m/s</span></div>
+                        <div style={{ color: '#8aab8a', marginTop: 4 }}>
+                          Risk:{' '}
+                          <span style={{ color: node.latest.risk_level === 'high' ? '#ef4444' : node.latest.risk_level === 'medium' ? '#fb923c' : '#4ade80', fontWeight: 700, textTransform: 'uppercase' }}>
+                            {node.latest.risk_level}
+                          </span>
+                        </div>
+                        <div style={{ color: '#4a6a4a', marginTop: 4, fontSize: 10 }}>
+                          {node.latest.timestamp ? new Date(node.latest.timestamp).toLocaleString('fi-FI') : ''}
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ color: '#4a6a4a' }}>No readings yet</div>
+                    )}
+                  </div>
+                </Popup>
+              </CircleMarker>
+            ))}
           </MapContainer>
         </div>
 

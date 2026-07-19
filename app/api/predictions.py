@@ -15,11 +15,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
+import requests
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.config.settings import settings
 from app.database.session import get_db
 from app.models.sensor_models import Alert, SensorReading
 from app.utils.fmi_client import fetch_forecast_weather, fetch_forecast_precipitation
@@ -95,20 +97,20 @@ def _risk_level(probability: float) -> str:
 
 def _detect_mode(body: PredictRequest) -> str:
     """
-    Decide which of the three input modes a request belongs to, based on
-    which sensor fields were provided. temperature/humidity/wind_speed must
-    be given together or not at all — a partial set is rejected.
+    Decide which input mode applies:
+    - fmi_only:      no sensor fields provided — all weather from FMI
+    - hardware_fmi:  temperature + humidity provided (wind + precip from FMI)
+    - hardware_only: temperature + humidity + wind_speed + precipitation all provided
     """
-    sensor_fields = (body.temperature, body.humidity, body.wind_speed)
-    if all(v is None for v in sensor_fields):
+    has_temp_humidity = body.temperature is not None and body.humidity is not None
+    has_wind          = body.wind_speed is not None
+    has_precip        = body.precipitation is not None
+
+    if not has_temp_humidity:
         return "fmi_only"
-    if any(v is None for v in sensor_fields):
-        raise HTTPException(
-            status_code=422,
-            detail="temperature, humidity and wind_speed must all be provided "
-            "together, or all omitted to use FMI-only mode",
-        )
-    return "hardware_only" if body.precipitation is not None else "hardware_fmi"
+    if has_temp_humidity and has_wind and has_precip:
+        return "hardware_only"
+    return "hardware_fmi"
 
 
 @router.get("/alerts")
@@ -159,6 +161,55 @@ def get_sensor_readings(db: Session = Depends(get_db)):
     ]
 
 
+@router.get("/sensor-nodes")
+def sensor_nodes(db: Session = Depends(get_db)):
+    """Return configured hardware sensor node locations with their latest reading."""
+    if not settings.sensor_lat or not settings.sensor_lon:
+        return []
+    latest = None
+    try:
+        row = (
+            db.query(SensorReading)
+            .filter(SensorReading.node_id == settings.sensor_node_id)
+            .order_by(SensorReading.timestamp.desc())
+            .first()
+        )
+        if row:
+            latest = {
+                "temperature": row.temperature,
+                "humidity":    row.humidity,
+                "wind_speed":  row.wind_speed,
+                "risk_level":  row.risk_level,
+                "timestamp":   row.timestamp.isoformat() if row.timestamp else None,
+            }
+    except Exception:
+        pass
+    return [{
+        "node_id": settings.sensor_node_id,
+        "lat":     settings.sensor_lat,
+        "lon":     settings.sensor_lon,
+        "name":    settings.sensor_location_name or settings.sensor_node_id,
+        "latest":  latest,
+    }]
+
+
+@router.get("/hardware-reading")
+def hardware_reading():
+    """Trigger the Pi gateway to pull a live reading from the ESP32 on demand."""
+    if not settings.pi_gateway_url:
+        raise HTTPException(status_code=503, detail="PI_GATEWAY_URL is not configured")
+    try:
+        resp = requests.get(f"{settings.pi_gateway_url}/reading", timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail="Pi gateway is unreachable")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=504, detail="Pi gateway timed out")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Pi gateway error: {e}")
+
+
 @router.post("/predict", response_model=PredictResponse)
 def predict(body: PredictRequest, db: Session = Depends(get_db)) -> PredictResponse:
     model = get_model()
@@ -189,13 +240,14 @@ def predict(body: PredictRequest, db: Session = Depends(get_db)) -> PredictRespo
         warning = weather.get("error")
 
     elif mode == "hardware_fmi":
-        temperature, humidity, wind_speed = body.temperature, body.humidity, body.wind_speed
-        precip_info = fetch_forecast_precipitation(body.station_lat, body.station_lon)
-        precipitation = precip_info.get("precipitation_mm")
+        temperature, humidity = body.temperature, body.humidity
+        weather = fetch_forecast_weather(body.station_lat, body.station_lon)
+        wind_speed    = body.wind_speed if body.wind_speed is not None else weather["wind_speed"]
+        precipitation = weather["precipitation"]
         fmi_precipitation = precipitation
         fmi_station_name = "FMI HARMONIE forecast"
         distance_km = None
-        warning = precip_info.get("error")
+        warning = weather.get("error")
 
     else:  # hardware_only — no FMI calls at all
         temperature, humidity, wind_speed = body.temperature, body.humidity, body.wind_speed

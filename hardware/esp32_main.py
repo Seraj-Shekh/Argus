@@ -1,27 +1,24 @@
 """
-ESP32 MicroPython firmware — Argus sensor node.
+ESP32 MicroPython firmware — Argus sensor node (pull mode).
 
-Sensors:
-  - DHT22 on GPIO 4  (temperature, humidity)
-  - MQ2   on GPIO 34 (smoke / gas, ADC)
+Runs a tiny HTTP server. When the Raspberry Pi calls GET /reading,
+the ESP32 reads sensors right then and returns the values as JSON.
+No data is sent unless something asks for it.
 
-Sends a JSON POST to the Raspberry Pi gateway every SEND_INTERVAL_S seconds.
-
-Upload BOTH this file (as main.py) and esp32_config.py (as config.py) to the
-ESP32 using Thonny. Edit esp32_config.py with your WiFi credentials and Pi IP
-before uploading.
+Upload BOTH this file (as main.py) and esp32_config.py (as config.py)
+to the ESP32 using Thonny.
 """
 
 import dht        # MicroPython built-in
 import machine    # MicroPython built-in
 import network    # MicroPython built-in
+import socket
 import time
 import ujson      # MicroPython built-in
-import urequests  # MicroPython built-in
 
 import config
 
-PI_URL = f"http://{config.PI_HOST}:{config.PI_PORT}"
+LISTEN_PORT = 80
 
 
 def connect_wifi() -> bool:
@@ -40,56 +37,75 @@ def connect_wifi() -> bool:
     return False
 
 
-def read_dht22():
+def read_sensors():
     sensor = dht.DHT22(machine.Pin(config.DHT_PIN))
     sensor.measure()
-    return sensor.temperature(), sensor.humidity()
+    temperature = sensor.temperature()
+    humidity    = sensor.humidity()
+    adc  = machine.ADC(machine.Pin(config.MQ2_PIN))
+    adc.atten(machine.ADC.ATTN_11DB)
+    smoke = adc.read()
+    return temperature, humidity, smoke
 
 
-def read_mq2() -> int:
-    adc = machine.ADC(machine.Pin(config.MQ2_PIN))
-    adc.atten(machine.ADC.ATTN_11DB)   # 0–3.3 V range → 0–4095
-    return adc.read()
-
-
-def send_reading(temperature: float, humidity: float, smoke: int) -> None:
-    payload = ujson.dumps({
-        "node_id":     config.NODE_ID,
-        "temperature": temperature,
-        "humidity":    humidity,
-        "smoke":       smoke,
-    })
-    try:
-        resp = urequests.post(
-            PI_URL,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=10,
-        )
-        risk = "?"
-        try:
-            risk = ujson.loads(resp.text).get("risk_level", "?")
-        except Exception:
-            pass
-        print(f"Sent OK  risk={risk}")
-        resp.close()
-    except Exception as e:
-        print("Send failed:", e)
-
-
-def main() -> None:
-    if not connect_wifi():
-        return
+def serve():
+    addr = socket.getaddrinfo("0.0.0.0", LISTEN_PORT)[0][-1]
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(addr)
+    s.listen(1)
+    print(f"ESP32 listening on port {LISTEN_PORT}")
 
     while True:
+        conn, addr = s.accept()
         try:
-            temperature, humidity = read_dht22()
-            smoke = read_mq2()
-            print(f"T={temperature}C  H={humidity}%  smoke={smoke}")
-            send_reading(temperature, humidity, smoke)
+            request = conn.recv(1024).decode()
+            first_line = request.split("\r\n")[0] if request else ""
+
+            if "GET /reading" in first_line:
+                try:
+                    temperature, humidity, smoke = read_sensors()
+                    print(f"Read: T={temperature}C H={humidity}% smoke={smoke}")
+                    body = ujson.dumps({
+                        "node_id":     config.NODE_ID,
+                        "temperature": temperature,
+                        "humidity":    humidity,
+                        "smoke":       smoke,
+                    })
+                    response = (
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: application/json\r\n"
+                        f"Content-Length: {len(body)}\r\n"
+                        "\r\n" + body
+                    )
+                except Exception as e:
+                    body = ujson.dumps({"error": str(e)})
+                    response = (
+                        "HTTP/1.1 500 Internal Server Error\r\n"
+                        "Content-Type: application/json\r\n"
+                        f"Content-Length: {len(body)}\r\n"
+                        "\r\n" + body
+                    )
+            else:
+                body = ujson.dumps({"error": "not found"})
+                response = (
+                    "HTTP/1.1 404 Not Found\r\n"
+                    "Content-Type: application/json\r\n"
+                    f"Content-Length: {len(body)}\r\n"
+                    "\r\n" + body
+                )
+
+            conn.send(response.encode())
         except Exception as e:
-            print("Sensor/send error:", e)
-        time.sleep(config.SEND_INTERVAL_S)
+            print("Connection error:", e)
+        finally:
+            conn.close()
+
+
+def main():
+    if not connect_wifi():
+        return
+    serve()
 
 
 main()
