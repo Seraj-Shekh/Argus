@@ -91,6 +91,9 @@ export default function Dashboard() {
   const [selected, setSelected]     = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
   const [sensorNodes, setSensorNodes] = useState([])
+  const [hardwareReading, setHardwareReading] = useState(null)
+  const [hardwareLoading, setHardwareLoading] = useState(false)
+  const [hardwareError, setHardwareError] = useState(null)
 
   // Load GeoJSON boundaries once
   useEffect(() => {
@@ -107,6 +110,24 @@ export default function Dashboard() {
       .then(setSensorNodes)
       .catch(() => {})
   }, [])
+
+  async function triggerHardwareReading() {
+    setHardwareLoading(true)
+    setHardwareError(null)
+    setHardwareReading(null)
+    try {
+      const res = await fetch('/api/hardware-reading')
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail ?? `Error ${res.status}`)
+      setHardwareReading(data)
+      // refresh sensor nodes to update the marker popup
+      fetch('/api/sensor-nodes').then((r) => r.ok ? r.json() : []).then(setSensorNodes)
+    } catch (e) {
+      setHardwareError(e.message)
+    } finally {
+      setHardwareLoading(false)
+    }
+  }
 
   // Fetch predictions for all regions
   const loadRisk = useCallback(async () => {
@@ -251,37 +272,88 @@ export default function Dashboard() {
                 key={node.node_id}
                 center={[node.lat, node.lon]}
                 radius={10}
+                pane="markerPane"
                 pathOptions={{
                   color: '#4ade80',
                   fillColor: '#4ade80',
                   fillOpacity: 0.9,
                   weight: 2,
                 }}
+                eventHandlers={{
+                  popupopen: () => {
+                    setHardwareReading(null)
+                    setHardwareError(null)
+                  },
+                }}
               >
                 <Popup className="argus-popup">
-                  <div style={{ minWidth: 180, fontFamily: 'monospace', fontSize: 12 }}>
-                    <div style={{ fontWeight: 700, color: '#4ade80', marginBottom: 6 }}>
-                      Hardware Sensor
+                  <div style={{ minWidth: 200, fontFamily: 'sans-serif', fontSize: 12 }}>
+                    <div style={{ fontWeight: 700, color: '#4ade80', marginBottom: 4 }}>
+                      ● Hardware Sensor
                     </div>
-                    <div style={{ color: '#c8dcc8', marginBottom: 4 }}>{node.name}</div>
-                    {node.latest ? (
+                    <div style={{ color: '#c8dcc8', marginBottom: 8 }}>{node.name}</div>
+
+                    {/* Last stored reading */}
+                    {node.latest && !hardwareReading && (
                       <>
+                        <div style={{ color: '#6b8f6b', fontSize: 10, marginBottom: 4 }}>Last stored reading</div>
                         <div style={{ color: '#8aab8a' }}>Temp: <span style={{ color: '#e2e8e2' }}>{node.latest.temperature}°C</span></div>
                         <div style={{ color: '#8aab8a' }}>Humidity: <span style={{ color: '#e2e8e2' }}>{node.latest.humidity}%</span></div>
-                        <div style={{ color: '#8aab8a' }}>Wind: <span style={{ color: '#e2e8e2' }}>{node.latest.wind_speed} m/s</span></div>
-                        <div style={{ color: '#8aab8a', marginTop: 4 }}>
+                        <div style={{ color: '#8aab8a', marginBottom: 4 }}>
                           Risk:{' '}
                           <span style={{ color: node.latest.risk_level === 'high' ? '#ef4444' : node.latest.risk_level === 'medium' ? '#fb923c' : '#4ade80', fontWeight: 700, textTransform: 'uppercase' }}>
                             {node.latest.risk_level}
                           </span>
                         </div>
-                        <div style={{ color: '#4a6a4a', marginTop: 4, fontSize: 10 }}>
+                        <div style={{ color: '#4a6a4a', fontSize: 10, marginBottom: 8 }}>
                           {node.latest.timestamp ? new Date(node.latest.timestamp).toLocaleString('fi-FI') : ''}
                         </div>
                       </>
-                    ) : (
-                      <div style={{ color: '#4a6a4a' }}>No readings yet</div>
                     )}
+
+                    {/* Live reading result */}
+                    {hardwareReading && (
+                      <>
+                        <div style={{ color: '#6b8f6b', fontSize: 10, marginBottom: 4 }}>Live reading</div>
+                        <div style={{ color: '#8aab8a' }}>Temp: <span style={{ color: '#e2e8e2' }}>{hardwareReading.features_used?.temperature}°C</span></div>
+                        <div style={{ color: '#8aab8a' }}>Humidity: <span style={{ color: '#e2e8e2' }}>{hardwareReading.features_used?.humidity}%</span></div>
+                        <div style={{ color: '#8aab8a' }}>Wind: <span style={{ color: '#e2e8e2' }}>{hardwareReading.features_used?.wind_speed} m/s</span></div>
+                        <div style={{ color: '#8aab8a', marginBottom: 4 }}>
+                          Risk:{' '}
+                          <span style={{ color: hardwareReading.risk_level === 'high' ? '#ef4444' : hardwareReading.risk_level === 'medium' ? '#fb923c' : '#4ade80', fontWeight: 700, textTransform: 'uppercase' }}>
+                            {hardwareReading.risk_level}
+                          </span>
+                          <span style={{ color: '#6b8f6b' }}> · {(hardwareReading.fire_risk * 100).toFixed(1)}%</span>
+                        </div>
+                        {hardwareReading.alert && (
+                          <div style={{ color: '#fb923c', fontSize: 11, marginBottom: 6, padding: '4px 6px', background: 'rgba(251,146,60,0.1)', borderRadius: 4 }}>
+                            {hardwareReading.alert.message_en}
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {hardwareError && (
+                      <div style={{ color: '#ef4444', fontSize: 11, marginBottom: 6 }}>{hardwareError}</div>
+                    )}
+
+                    {!node.latest && !hardwareReading && (
+                      <div style={{ color: '#4a6a4a', marginBottom: 8 }}>No readings yet</div>
+                    )}
+
+                    <button
+                      onClick={triggerHardwareReading}
+                      disabled={hardwareLoading}
+                      style={{
+                        width: '100%', padding: '5px 0', marginTop: 4,
+                        background: hardwareLoading ? '#1a2e1a' : '#166534',
+                        color: '#4ade80', border: '1px solid #4ade80',
+                        borderRadius: 4, cursor: hardwareLoading ? 'not-allowed' : 'pointer',
+                        fontSize: 11, fontWeight: 600,
+                      }}
+                    >
+                      {hardwareLoading ? 'Reading sensors…' : 'Get Live Reading'}
+                    </button>
                   </div>
                 </Popup>
               </CircleMarker>
