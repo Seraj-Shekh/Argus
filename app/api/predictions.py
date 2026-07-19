@@ -113,7 +113,10 @@ def _detect_mode(body: PredictRequest) -> str:
 
 @router.get("/alerts")
 def get_alerts(db: Session = Depends(get_db)):
-    rows = db.query(Alert).order_by(Alert.timestamp.desc()).limit(200).all()
+    try:
+        rows = db.query(Alert).order_by(Alert.timestamp.desc()).limit(200).all()
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database is unavailable")
     return [
         {
             "id":          r.id,
@@ -138,7 +141,10 @@ def get_alerts(db: Session = Depends(get_db)):
 
 @router.get("/sensor-readings")
 def get_sensor_readings(db: Session = Depends(get_db)):
-    rows = db.query(SensorReading).order_by(SensorReading.timestamp.desc()).limit(200).all()
+    try:
+        rows = db.query(SensorReading).order_by(SensorReading.timestamp.desc()).limit(200).all()
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database is unavailable")
     return [
         {
             "id": r.id,
@@ -230,6 +236,7 @@ def predict(body: PredictRequest, db: Session = Depends(get_db)) -> PredictRespo
     node_id = body.node_id or "predict-api"
     source  = "hardware" if mode in ("hardware_fmi", "hardware_only") else "software"
 
+    db_error = None
     try:
         db.add(SensorReading(
             node_id=node_id,
@@ -259,6 +266,7 @@ def predict(body: PredictRequest, db: Session = Depends(get_db)) -> PredictRespo
         db.commit()
     except Exception:
         db.rollback()
+        db_error = "Prediction succeeded but could not be saved — database is unavailable"
 
     return PredictResponse(
         fire_risk=round(fire_proba, 4),
@@ -270,6 +278,6 @@ def predict(body: PredictRequest, db: Session = Depends(get_db)) -> PredictRespo
         distance_to_station_km=distance_km,
         timestamp=ts.isoformat(),
         features_used=features,
-        warning=warning,
+        warning=db_error or warning,
         alert=alert_payload,
     )
