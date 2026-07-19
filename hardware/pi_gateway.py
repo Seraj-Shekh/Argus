@@ -73,13 +73,23 @@ def do_reading() -> tuple[dict | None, str | None]:
     try:
         resp   = requests.post(BACKEND_URL, json=predict_payload, timeout=20)
         result = resp.json()
+        risk = result.get("risk_level")
         print(
-            f"[backend] risk={result.get('risk_level')}  "
+            f"[backend] risk={risk}  "
             f"prob={result.get('fire_risk')}  "
             f"mode={result.get('input_mode')}"
         )
         if result.get("alert"):
             print(f"[alert] {result['alert'].get('message_en', '')[:80]}")
+
+        # Turn LED on for high risk, off otherwise
+        led_url = f"http://{ESP32_HOST}:{ESP32_PORT}/led"
+        try:
+            requests.post(led_url, json={"on": risk == "high"}, timeout=5)
+            print(f"[led] {'ON' if risk == 'high' else 'OFF'}")
+        except Exception as e:
+            print(f"[led] Control failed: {e}")
+
         return result, None
     except Exception as e:
         return None, f"Backend call failed: {e}"

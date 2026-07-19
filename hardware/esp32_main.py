@@ -19,6 +19,10 @@ import ujson      # MicroPython built-in
 import config
 
 LISTEN_PORT = 80
+LED_PIN = 25
+
+led = machine.Pin(LED_PIN, machine.Pin.OUT)
+led.off()
 
 
 def connect_wifi() -> bool:
@@ -76,6 +80,30 @@ def serve():
                         "humidity":    humidity,
                         "smoke":       smoke,
                     })
+                    response = (
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: application/json\r\n"
+                        f"Content-Length: {len(body)}\r\n"
+                        "\r\n" + body
+                    )
+                except Exception as e:
+                    body = ujson.dumps({"error": str(e)})
+                    response = (
+                        "HTTP/1.1 500 Internal Server Error\r\n"
+                        "Content-Type: application/json\r\n"
+                        f"Content-Length: {len(body)}\r\n"
+                        "\r\n" + body
+                    )
+            elif "POST /led" in first_line:
+                try:
+                    # read body after headers
+                    body_start = request.find("\r\n\r\n")
+                    payload = ujson.loads(request[body_start + 4:]) if body_start != -1 else {}
+                    turn_on = payload.get("on", False)
+                    led.value(1 if turn_on else 0)
+                    state = "on" if turn_on else "off"
+                    print(f"LED {state}")
+                    body = ujson.dumps({"led": state})
                     response = (
                         "HTTP/1.1 200 OK\r\n"
                         "Content-Type: application/json\r\n"
