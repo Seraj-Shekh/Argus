@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 
 const RISK_STYLES = {
   low:    'text-green-400',
@@ -6,21 +6,8 @@ const RISK_STYLES = {
   high:   'text-red-400',
 }
 
-export default function AlertsHistory() {
-  const [alerts, setAlerts]   = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError]     = useState(null)
+export default function AlertsHistory({ alerts, loading, error }) {
   const [expanded, setExpanded] = useState(null)
-
-  useEffect(() => {
-    fetch('/api/alerts')
-      .then((r) => {
-        if (!r.ok) throw new Error(`Server returned ${r.status}`)
-        return r.json()
-      })
-      .then((data) => { setAlerts(Array.isArray(data) ? data : []); setLoading(false) })
-      .catch((e) => { setError(e.message); setLoading(false) })
-  }, [])
 
   return (
     <div className="flex flex-col gap-6">

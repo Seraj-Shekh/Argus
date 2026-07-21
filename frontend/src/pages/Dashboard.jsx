@@ -1,31 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { MapContainer, TileLayer, GeoJSON, CircleMarker, Popup } from 'react-leaflet'
 
 const FINLAND_CENTER = [65.0, 26.0]
 const FINLAND_BOUNDS = [[59.3, 19.0], [70.1, 31.6]]
-
-// Center coordinate used to call /api/predict for each region
-const REGION_CENTERS = {
-  'Uusimaa':            { lat: 60.25, lon: 25.00 },
-  'Varsinais-Suomi':    { lat: 60.50, lon: 22.30 },
-  'Satakunta':          { lat: 61.50, lon: 22.00 },
-  'Kanta-Häme':         { lat: 60.90, lon: 24.40 },
-  'Pirkanmaa':          { lat: 61.70, lon: 23.80 },
-  'Päijät-Häme':        { lat: 61.00, lon: 25.70 },
-  'Kymenlaakso':        { lat: 60.70, lon: 26.70 },
-  'Etelä-Karjala':      { lat: 61.10, lon: 28.20 },
-  'Etelä-Savo':         { lat: 61.80, lon: 27.50 },
-  'Pohjois-Savo':       { lat: 63.10, lon: 27.40 },
-  'Pohjois-Karjala':    { lat: 62.60, lon: 29.80 },
-  'Keski-Suomi':        { lat: 62.20, lon: 25.70 },
-  'Etelä-Pohjanmaa':    { lat: 62.80, lon: 22.80 },
-  'Pohjanmaa':          { lat: 63.10, lon: 21.70 },
-  'Keski-Pohjanmaa':    { lat: 63.80, lon: 24.50 },
-  'Pohjois-Pohjanmaa':  { lat: 65.00, lon: 26.50 },
-  'Kainuu':             { lat: 64.30, lon: 28.50 },
-  'Lappi':              { lat: 67.90, lon: 26.70 },
-  'Ahvenanmaa':         { lat: 60.10, lon: 20.00 },
-}
 
 const RISK_FILL = {
   high:    { fill: '#ef4444', opacity: 0.65 },
@@ -66,61 +43,24 @@ function Row({ label, value }) {
   )
 }
 
-async function fetchRisk(name) {
-  const center = REGION_CENTERS[name]
-  if (!center) return null
-  try {
-    const res = await fetch('/api/predict', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ station_lat: center.lat, station_lon: center.lon, location_name: name }),
-    })
-    if (!res.ok) return null
-    return { name, ...(await res.json()) }
-  } catch {
-    return null
-  }
-}
-
-export default function Dashboard() {
-  const [geojson, setGeojson]       = useState(null)
-  const [riskMap, setRiskMap]       = useState({})   // { regionName: predictionResult }
-  const [geojsonKey, setGeojsonKey] = useState(0)    // forces GeoJSON re-render on data load
-  const [loading, setLoading]       = useState(true)
-  const [backendDown, setBackendDown] = useState(false)
-  const [selected, setSelected]     = useState(null)
-  const [lastUpdated, setLastUpdated] = useState(null)
-  const [sensorNodes, setSensorNodes] = useState([])
+export default function Dashboard({
+  geojson, riskMap, geojsonKey, loading, backendDown, lastUpdated,
+  sensorNodes, setSensorNodes, loadRisk,
+}) {
+  const [selected, setSelected]               = useState(null)
   const [hardwareReading, setHardwareReading] = useState(null)
   const [hardwareLoading, setHardwareLoading] = useState(false)
-  const [hardwareError, setHardwareError] = useState(null)
-
-  // Load GeoJSON boundaries once
-  useEffect(() => {
-    fetch('/finland-regions.geojson')
-      .then((r) => r.json())
-      .then(setGeojson)
-      .catch(() => console.error('Could not load finland-regions.geojson'))
-  }, [])
-
-  // Load hardware sensor node locations
-  useEffect(() => {
-    fetch('/api/sensor-nodes')
-      .then((r) => r.ok ? r.json() : [])
-      .then(setSensorNodes)
-      .catch(() => {})
-  }, [])
+  const [hardwareError, setHardwareError]     = useState(null)
 
   async function triggerHardwareReading() {
     setHardwareLoading(true)
     setHardwareError(null)
     setHardwareReading(null)
     try {
-      const res = await fetch('/api/hardware-reading')
+      const res  = await fetch('/api/hardware-reading')
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail ?? `Error ${res.status}`)
       setHardwareReading(data)
-      // refresh sensor nodes to update the marker popup
       fetch('/api/sensor-nodes').then((r) => r.ok ? r.json() : []).then(setSensorNodes)
     } catch (e) {
       setHardwareError(e.message)
@@ -129,34 +69,11 @@ export default function Dashboard() {
     }
   }
 
-  // Fetch predictions for all regions
-  const loadRisk = useCallback(async () => {
-    setLoading(true)
-    setBackendDown(false)
-    const names = Object.keys(REGION_CENTERS)
-    const results = await Promise.all(names.map(fetchRisk))
-    const ok = results.filter(Boolean)
-    if (ok.length === 0) {
-      setBackendDown(true)
-    } else {
-      const map = {}
-      ok.forEach((r) => { map[r.name] = r })
-      setRiskMap(map)
-      setGeojsonKey((k) => k + 1)   // trigger GeoJSON re-render with new colours
-      setLastUpdated(new Date())
-    }
-    setLoading(false)
-  }, [])
-
-  useEffect(() => { loadRisk() }, [loadRisk])
-
-  // GeoJSON layer style — called per feature
   const styleFeature = useCallback(
     (feature) => riskStyle(riskMap[feature.properties.nimi]?.risk_level),
     [riskMap],
   )
 
-  // Attach hover + click to each region polygon
   const onEachFeature = useCallback(
     (feature, layer) => {
       const name = feature.properties.nimi
@@ -180,10 +97,10 @@ export default function Dashboard() {
     [riskMap],
   )
 
-  const regions = Object.values(riskMap)
-  const highCount = regions.filter((r) => r.risk_level === 'high').length
-  const medCount  = regions.filter((r) => r.risk_level === 'medium').length
-  const avgRisk   = regions.length
+  const regions    = Object.values(riskMap)
+  const highCount  = regions.filter((r) => r.risk_level === 'high').length
+  const medCount   = regions.filter((r) => r.risk_level === 'medium').length
+  const avgRisk    = regions.length
     ? (regions.reduce((s, r) => s + r.fire_risk, 0) / regions.length * 100).toFixed(1)
     : null
 
@@ -293,7 +210,6 @@ export default function Dashboard() {
                     </div>
                     <div style={{ color: '#c8dcc8', marginBottom: 8 }}>{node.name}</div>
 
-                    {/* Last stored reading */}
                     {node.latest && !hardwareReading && (
                       <>
                         <div style={{ color: '#6b8f6b', fontSize: 10, marginBottom: 4 }}>Last stored reading</div>
@@ -311,7 +227,6 @@ export default function Dashboard() {
                       </>
                     )}
 
-                    {/* Live reading result */}
                     {hardwareReading && (
                       <>
                         <div style={{ color: '#6b8f6b', fontSize: 10, marginBottom: 4 }}>Live reading</div>
@@ -363,7 +278,6 @@ export default function Dashboard() {
 
         {/* Side panel */}
         <div className="flex flex-col gap-4">
-          {/* Selected region */}
           <div className="bg-[#0d150d] border border-[#1e3a1e] rounded-lg p-4 flex-1 overflow-y-auto">
             {!selected ? (
               <>
@@ -377,13 +291,11 @@ export default function Dashboard() {
               </>
             ) : (
               <>
-                {/* Region name + risk badge */}
                 <div className="flex items-center gap-2 mb-4">
                   <h2 className="text-sm font-semibold text-[#e2e8e2] flex-1">{selected.name}</h2>
                   <RiskBadge level={selected.risk_level} />
                 </div>
 
-                {/* Alert block — shown first and prominently */}
                 {selected.alert ? (
                   <div className={`p-3 rounded-lg border text-xs leading-relaxed mb-4 ${
                     selected.risk_level === 'high'
@@ -402,7 +314,6 @@ export default function Dashboard() {
                   </div>
                 )}
 
-                {/* Weather details */}
                 <div className="text-sm space-y-1">
                   <p className="text-xs text-[#6b8f6b] mb-1">Weather data</p>
                   <Row label="Fire probability" value={`${(selected.fire_risk * 100).toFixed(1)}%`} />
