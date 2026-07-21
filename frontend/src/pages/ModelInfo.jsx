@@ -101,8 +101,8 @@ export default function ModelInfo() {
           <Detail label="Train/Test Split" value="80% / 20%, stratified" />
           <Detail label="Fire Events Source" value="EFFIS (EU Fire Database)" />
           <Detail label="Weather Source" value="FMI Open Data WFS API" />
-          <Detail label="Stations Filtered" value="199 automatic weather stations" />
-          <Detail label="Date Range" value="2015–2024" />
+          <Detail label="Stations in Dataset" value="157 of 199 available stations" />
+          <Detail label="Date Range" value="2015–2026" />
         </div>
 
         <div className="mt-5 p-3 bg-[#0a120a] border border-[#1e3a1e] rounded text-xs text-[#6b8f6b] leading-relaxed">

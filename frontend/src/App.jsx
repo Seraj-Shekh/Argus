@@ -1,12 +1,10 @@
 import { Routes, Route, NavLink } from 'react-router-dom'
 import Dashboard from './pages/Dashboard.jsx'
-import Predict from './pages/Predict.jsx'
 import ModelInfo from './pages/ModelInfo.jsx'
 import AlertsHistory from './pages/AlertsHistory.jsx'
 
 const NAV = [
   { to: '/', label: 'Dashboard' },
-  { to: '/predict', label: 'Predict' },
   { to: '/model', label: 'Model' },
   { to: '/alerts', label: 'Alerts' },
 ]
@@ -49,7 +47,6 @@ export default function App() {
       <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-6">
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/predict" element={<Predict />} />
           <Route path="/model" element={<ModelInfo />} />
           <Route path="/alerts" element={<AlertsHistory />} />
         </Routes>
